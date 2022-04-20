@@ -2,6 +2,8 @@ import socket
 import csv
 import ipaddress
 import time
+import requests
+import re
 from contextlib import closing
 from tinydb import TinyDB, Query
 
@@ -16,7 +18,45 @@ def check_socket(host, port):
         else:
             return False
 
-def checkPorts(fromIP, toIP, port, rIndex, db, info="- no info"):
+def check_webpage(ip, port, time=5):
+    url = f"http://{ip}:{str(port)}"
+    info = {
+        "title": "",
+        "server": "",
+        "fqdn": "",
+        "exception": ""
+    }
+
+    try:
+        res = requests.get(url, timeout=time)
+        title = re.search('<title>(.+?)</title>', res.text)
+
+        if title:
+            info["title"] = title.group(1)
+        
+        info["server"] = str(res.headers.get("Server"))
+        info["fqdn"] = socket.getnameinfo((str(ip), port), 0)[0]
+
+    except requests.exceptions.ConnectTimeout:
+        info["exception"] = "connecttimeouterror"
+
+    except requests.exceptions.ReadTimeout:
+        info["exception"] = "readtimeouterror"
+    
+    except requests.exceptions.ConnectionError:
+        info["exception"] = "connectionerror"
+    
+    except requests.exceptions.InvalidURL:
+        info["exception"] = "InvalidURLerror" + url
+
+    except Exception as e:
+        info["exception"] = type(e).__name__
+    
+    finally:
+        return info
+
+
+def checkPorts(fromIP, toIP, port, rIndex, db, comment=""):
     start_ip = ipaddress.IPv4Address(fromIP)
     end_ip = ipaddress.IPv4Address(toIP)
 
@@ -27,7 +67,16 @@ def checkPorts(fromIP, toIP, port, rIndex, db, info="- no info"):
 
         if check_socket(ip, port):
             print(f"-- port {port} open: {ip}") 
-            db.upsert({'ip': ip, 'port': port, 'info': info, 'rowIndex': rIndex, 'timestamp': int(time.time())}, IPscan.ip == ip)
+
+            info = check_webpage(ip, port)
+            db.upsert({
+                'ip': ip, 
+                'port': port, 
+                'comment': comment, 
+                'rowIndex': rIndex, 
+                'timestamp': int(time.time()), 
+                "info": info
+                }, IPscan.ip == ip)
         else:
             print(f"-- port {port} closed: {ip}")
     
@@ -35,7 +84,7 @@ def buildSaveString(ip, port, provider):
     return f"{ip}:{port}, {provider}"
 
 def main(): 
-    port=80
+    port = 80
     db = TinyDB('./db/db.json')
 
     with open('./crawling-data/de-1.csv', newline='') as csvfile:
